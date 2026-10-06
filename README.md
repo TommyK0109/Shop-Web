@@ -20,7 +20,7 @@ docker compose exec api npm run seed --workspace server
 
 `setup:local` creates the local `.env` files and random JWT secrets. Docker installs dependencies and applies database migrations automatically. Run the seed only for initial demo setup: it resets the local database.
 
-Open **http://localhost:5200**. API health: http://localhost:5201/health. The default setup does not require Redis.
+Open **http://localhost:5200**. API health: http://localhost:5201/health.
 
 Demo accounts: `customer@storefront.dev`, `seller@storefront.dev`, `admin@storefront.dev`. Password for all three: `Password123!`.
 
