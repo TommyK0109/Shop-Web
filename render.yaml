@@ -1,0 +1,92 @@
+# Render Blueprint — API + managed Postgres (PLAN.md §10).
+# Create from the Render dashboard: New → Blueprint → point at this repo.
+# The client is deployed separately on Vercel (see vercel.json).
+databases:
+  - name: storefront-db
+    databaseName: storefront
+    user: storefront
+    plan: free
+
+services:
+  - type: web
+    name: storefront-api
+    runtime: node
+    plan: free
+    # Build from the repo root: this is an npm-workspaces project, so the
+    # lockfile and the hoisted dependency tree live there. `npm run build`
+    # for the server also compiles the shared Zod schemas it imports.
+    buildCommand: npm ci && npx prisma generate --schema server/prisma/schema.prisma && npm run build --workspace server
+    # migrate deploy runs on every boot rather than by hand against
+    # production (PLAN.md §10). It only applies committed migrations and is
+    # idempotent, so restarts are safe.
+    startCommand: npx prisma migrate deploy --schema server/prisma/schema.prisma && npm start --workspace server
+    healthCheckPath: /health
+    # Note: the demo seed (`npm run seed`) is NOT part of the boot sequence and
+    # must never be. It deletes every row in every table; it refuses to run
+    # while NODE_ENV=production (set below), but it is also simply not invoked
+    # here. To create the categories and the first admin on a fresh database,
+    # run `npm run bootstrap --workspace server` once from the Render shell —
+    # that script only inserts.
+    envVars:
+      # Deployment remains disabled until extension availability and a durable
+      # worker/limiter have been verified. See docs/RAG-OPERATIONS.md.
+      - key: RAG_ENABLED
+        value: "false"
+      - key: RAG_GENERATION_ENABLED
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: storefront-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      # Generated once by Render and held in the service's environment —
+      # never committed. Rotating either invalidates issued tokens.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_TTL
+        value: 15m
+      - key: REFRESH_TOKEN_TTL
+        value: 7d
+      # sync: false = prompted for on first deploy, not stored in git.
+      # The deployed client's origin, for the CORS allowlist. Scheme and host
+      # only, no path — that is what the browser sends in the Origin header.
+      # Checkout no longer redirects off-site, so this is not doubling as a
+      # redirect base any more.
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      # Optional. Left blank, the API still boots — image upload returns a
+      # clear error instead (see server/src/env.ts). Payments need no
+      # configuration at all: buyers transfer directly to each seller.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+    # Free-plan services run a single instance, so there is nothing to load
+    # balance in production yet — see docker-compose.yml for a local
+    # multi-instance + Nginx demo of the same API. Render's own load
+    # balancer only kicks in once `numInstances` > 1, which needs a paid
+    # plan (Starter or above).
+    numInstances: 1

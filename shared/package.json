@@ -1,0 +1,25 @@
+{
+  "name": "@storefront/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "schemas/index.ts",
+  "types": "schemas/index.ts",
+  "exports": {
+    ".": {
+      "types": "./schemas/index.ts",
+      "development": "./schemas/index.ts",
+      "module": "./schemas/index.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

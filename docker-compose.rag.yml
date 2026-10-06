@@ -1,0 +1,38 @@
+﻿# Optional experimental assistant. Not needed for README's basic setup.
+# docker compose --env-file server/.env -f docker-compose.yml -f docker-compose.rag.yml up -d --build
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  api:
+    environment:
+      REDIS_URL: redis://redis:6379
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_GENERATION_ENABLED: ${RAG_GENERATION_ENABLED:-false}
+    depends_on:
+      redis:
+        condition: service_healthy
+  rag-worker:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - server/.env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/storefront?schema=public
+      REDIS_URL: redis://redis:6379
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_GENERATION_ENABLED: ${RAG_GENERATION_ENABLED:-false}
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: npm run rag:worker --workspace server

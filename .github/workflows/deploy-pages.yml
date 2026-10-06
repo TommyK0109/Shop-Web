@@ -1,0 +1,95 @@
+name: Deploy client to GitHub Pages
+
+# GitHub Pages can only serve the static client. The API and PostgreSQL need a
+# real runtime and are deployed separately from render.yaml — set the
+# VITE_API_URL repository variable to that deployed API's /api URL.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two publishes race, but don't cancel one that's mid-flight either.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Without this the client would silently fall back to localhost:5201 and
+      # ship a site that can't reach any API — fail loudly instead.
+      - name: Check the API URL is configured
+        run: |
+          if [ -z "${{ vars.VITE_API_URL }}" ]; then
+            echo "::error::Repository variable VITE_API_URL is not set. Add it under" \
+                 "Settings → Secrets and variables → Actions → Variables, pointing at" \
+                 "the deployed API, e.g. https://storefront-api.onrender.com/api"
+            exit 1
+          fi
+
+      - name: Check the CAPTCHA key is configured
+        env:
+          TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
+        run: |
+          if [ -z "$TURNSTILE_SITE_KEY" ] || [[ "$TURNSTILE_SITE_KEY" =~ ^[123]x0 ]]; then
+            echo "::error::Set a production VITE_TURNSTILE_SITE_KEY repository variable before deployment."
+            exit 1
+          fi
+
+      - name: Work out the Pages base path
+        id: base
+        run: |
+          repo='${{ github.event.repository.name }}'
+          owner='${{ github.repository_owner }}'
+          # A repo named <owner>.github.io is served from the domain root;
+          # every other repo is served from /<repo>/.
+          if [ "${repo,,}" = "${owner,,}.github.io" ]; then
+            echo "path=/" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=/$repo/" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build client
+        env:
+          VITE_BASE_PATH: ${{ steps.base.outputs.path }}
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
+        run: npm run build --workspace client
+
+      # Pages has no rewrite rules, so a deep link such as /products/<slug>
+      # would hit a hard 404. Serving the SPA shell as the 404 page keeps the
+      # requested URL intact and lets React Router resolve it client-side.
+      - name: Add SPA fallback for deep links
+        run: cp client/dist/index.html client/dist/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: client/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

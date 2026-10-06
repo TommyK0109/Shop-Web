@@ -1,0 +1,59 @@
+{
+  "name": "storefront-server",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "dev": "tsx watch --conditions=development src/index.ts",
+    "build": "tsc -p ../shared/tsconfig.json && tsc",
+    "start": "node dist/src/index.js",
+    "seed": "ts-node prisma/seed.ts",
+    "bootstrap": "ts-node prisma/bootstrap.ts",
+    "rag:worker": "tsx --conditions=development src/workers/rag.worker.ts",
+    "rag:backfill": "tsx --conditions=development prisma/ragBackfill.ts",
+    "rag:status": "tsx --conditions=development prisma/ragStatus.ts",
+    "rag:demo": "tsx --conditions=development prisma/ragDemo.ts",
+    "rag:eval": "tsx --conditions=development eval/runRagEval.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "test": "vitest run"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "@storefront/shared": "*",
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.5.1",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.1",
+    "nodemailer": "^10.0.14",
+    "qrcode": "^1.5.4",
+    "redis": "^4.7.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^20.14.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.6",
+    "@types/supertest": "^6.0.2",
+    "prisma": "^5.20.0",
+    "supertest": "^7.0.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.11"
+  }
+}

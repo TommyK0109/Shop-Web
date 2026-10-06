@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  ci:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+
+    # The server specs are integration-level (Supertest against real routes),
+    # so they need a real Postgres — same major version as docker-compose.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg16-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: storefront_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/storefront_test?schema=public
+      # CI-only throwaway secrets. Real ones are never committed (PLAN.md §10).
+      JWT_ACCESS_SECRET: ci-access-secret-not-used-anywhere-real
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-used-anywhere-real
+      NODE_ENV: test
+      RAG_ENABLED: "false"
+      RAG_GENERATION_ENABLED: "false"
+      REDIS_URL: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # One install for all three workspaces (client/server/shared).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema server/prisma/schema.prisma
+
+      # migrate deploy, not migrate dev — applies committed migrations without
+      # ever trying to author a new one, the same command used on deploy.
+      - name: Apply migrations
+        run: npx prisma migrate deploy --schema server/prisma/schema.prisma
+
+      - name: Lint client
+        run: npm run lint --workspace client
+
+      # Run through the workspace, not a bare `npx tsc` from the root: the
+      # root-hoisted TypeScript is the client's (v6) and rejects the server's
+      # moduleResolution setting. The server pins its own 5.x.
+      - name: Typecheck server
+        run: npm exec --workspace server -- tsc --noEmit
+
+      - name: Validate RAG evaluation dataset
+        run: npm run rag:eval --workspace server -- --validate
+
+      - name: Server specs (unit + API integration)
+        run: npm test --workspace server
+
+      - name: Client specs (unit + component)
+        run: npm test --workspace client
+
+      - name: Build server
+        run: npm run build --workspace server
+
+      # tsc -b then vite build — also typechecks the client.
+      - name: Build client
+        run: npm run build --workspace client

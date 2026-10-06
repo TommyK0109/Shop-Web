@@ -1,0 +1,427 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  customer
+  seller
+  admin
+}
+
+enum SellerStatus {
+  pending
+  approved
+  rejected
+  suspended
+}
+
+enum OrderStatus {
+  pending_payment
+  // Some sellers in the order have been paid, others haven't. An order that
+  // spans three stores is genuinely three separate payments now, so "paid"
+  // is no longer a single moment — see PaymentStatus below.
+  partially_paid
+  paid
+  cancelled
+}
+
+// Why a product is (or isn't) purchasable. Deliberately separate from
+// stockQty: running out of physical units does NOT make a product
+// unavailable, because that would silently empty customers' carts. Only the
+// seller explicitly confirming it moves a product off `active`.
+enum ProductStatus {
+  active
+  out_of_stock
+  archived
+}
+
+enum ShipmentStatus {
+  confirmed
+  packed
+  received
+}
+
+enum PaymentStatus {
+  // Created with the order; the buyer has not said they've transferred yet.
+  pending
+  // Buyer pressed "I've transferred" — waiting on the seller to check their
+  // own account. Payments land directly in the seller's bank account, so the
+  // seller is the only party who can actually see the money arrive.
+  awaiting_confirmation
+  succeeded
+  failed
+  refunded
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  avatarUrl    String?  @map("avatar_url")
+  avatarPublicId String? @map("avatar_public_id")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  tokenVersion Int      @default(0) @map("token_version")
+  role         UserRole @default(customer)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  addresses Address[]
+  orders    Order[]
+  reviews   Review[]
+  cart      Cart?
+  seller    Seller?
+  emailTokens EmailToken[]
+
+  @@map("users")
+}
+
+model EmailToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  purpose   String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("email_tokens")
+}
+
+model Seller {
+  id               String       @id @default(uuid())
+  userId           String       @unique @map("user_id")
+  applicantName    String       @map("applicant_name")
+  nationalIdMasked String       @map("national_id_masked")
+  businessName     String       @map("business_name")
+  slug             String       @unique
+  description      String?
+  addressLine1     String       @map("address_line1")
+  city             String
+  postalCode       String       @map("postal_code")
+  country          String
+  status           SellerStatus @default(pending)
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  user          User                 @relation(fields: [userId], references: [id])
+  products      Product[]
+  orderItems    OrderItem[]
+  shipments     Shipment[]
+  payments      Payment[]
+  paymentMethod SellerPaymentMethod?
+
+  @@map("sellers")
+}
+
+// How one store gets paid. Every seller has exactly one, provisioned
+// automatically when they apply — the platform never holds the money, so a
+// store that can't be paid can't trade. The buyer transfers straight to
+// these details; the QR the checkout renders is built from them.
+model SellerPaymentMethod {
+  id            String   @id @default(uuid())
+  sellerId      String   @unique @map("seller_id")
+  // Napas 6-digit bank bin (e.g. 970436 = Vietcombank). Drives both the
+  // VietQR payload and the human-readable bank name shown next to it.
+  bankBin       String   @map("bank_bin")
+  bankName      String   @map("bank_name")
+  accountNumber String   @map("account_number")
+  accountName   String   @map("account_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id])
+
+  @@map("seller_payment_methods")
+}
+
+model Address {
+  id         String @id @default(uuid())
+  userId     String @map("user_id")
+  line1      String
+  city       String
+  postalCode String @map("postal_code")
+  country    String
+
+  user   User    @relation(fields: [userId], references: [id])
+  orders Order[]
+
+  @@map("addresses")
+}
+
+model Category {
+  id   String @id @default(uuid())
+  name String
+  slug String @unique
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id           String        @id @default(uuid())
+  sellerId     String        @map("seller_id")
+  categoryId   String        @map("category_id")
+  name         String
+  slug         String        @unique
+  description  String
+  specifications Json?
+  ragRevision  Int           @default(1) @map("rag_revision")
+  priceCents   Int           @map("price_cents")
+  stockQty     Int           @map("stock_qty")
+  // Products are never hard-deleted. Order history, reviews and (above all)
+  // customers' carts hold references to them, and every one of those FKs is
+  // ON DELETE RESTRICT — a real DELETE would either fail outright or destroy
+  // the record of what someone actually bought.
+  status       ProductStatus @default(active)
+  // Set the moment the seller confirms the product is unavailable. Kept
+  // separate from `status` so "when did this stop being sellable" survives a
+  // later restock.
+  outOfStockAt DateTime?     @map("out_of_stock_at")
+  archivedAt   DateTime?     @map("archived_at")
+
+  seller       Seller              @relation(fields: [sellerId], references: [id])
+  category     Category            @relation(fields: [categoryId], references: [id])
+  images       ProductImage[]
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  reviews      Review[]
+  cartRemovals CartRemovalNotice[]
+  ragDocument  ProductRagDocument?
+  ragIndexJob  RagIndexJob?
+
+  @@index([categoryId])
+  @@index([sellerId])
+  @@index([status])
+  @@map("products")
+}
+
+model ProductRagDocument {
+  productId      String   @id @map("product_id")
+  documentText   String   @map("document_text")
+  sourceRevision Int      @map("source_revision")
+  contentHash    String   @map("content_hash")
+  embeddingModel String   @map("embedding_model")
+  embedding      Unsupported("vector(1536)")
+  searchVector   Unsupported("tsvector")? @map("search_vector")
+  indexedAt      DateTime @default(now()) @map("indexed_at")
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_rag_documents")
+}
+
+model RagIndexJob {
+  productId       String   @id @map("product_id")
+  desiredRevision Int      @map("desired_revision")
+  state           String   @default("pending")
+  attemptCount    Int      @default(0) @map("attempt_count")
+  nextAttemptAt   DateTime @default(now()) @map("next_attempt_at")
+  claimToken      String?  @map("claim_token")
+  leaseUntil      DateTime? @map("lease_until")
+  lastErrorCode   String?  @map("last_error_code")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @map("updated_at")
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([state, nextAttemptAt])
+  @@map("rag_index_jobs")
+}
+
+model RagProviderDay {
+  day          String @id
+  calls        Int    @default(0)
+  inputTokens  Int    @default(0) @map("input_tokens")
+  outputTokens Int    @default(0) @map("output_tokens")
+
+  @@map("rag_provider_days")
+}
+
+model ProductImage {
+  id        String @id @default(uuid())
+  productId String @map("product_id")
+  url       String
+  sortOrder Int    @default(0) @map("sort_order")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("product_images")
+}
+
+model Cart {
+  id     String @id @default(uuid())
+  userId String @unique @map("user_id")
+
+  user           User                @relation(fields: [userId], references: [id])
+  items          CartItem[]
+  removalNotices CartRemovalNotice[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String   @map("cart_id")
+  productId String   @map("product_id")
+  quantity  Int
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  cart    Cart    @relation(fields: [cartId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  // One row per product per cart. The controller reads-then-writes when
+  // adding, and two concurrent "add to cart" clicks would otherwise create
+  // two rows for the same product and quietly split the quantity.
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+// Why something left a cart. A cart item is only ever removed by the
+// customer themselves or by the seller confirming the product is gone —
+// and in the second case the customer never asked for it, so they get told
+// what happened instead of finding the row silently missing.
+model CartRemovalNotice {
+  id          String    @id @default(uuid())
+  cartId      String    @map("cart_id")
+  productId   String    @map("product_id")
+  productName String    @map("product_name")
+  quantity    Int
+  reason      String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  // Cleared once the customer has seen the notice, so it shows once rather
+  // than nagging on every cart open.
+  seenAt      DateTime? @map("seen_at")
+
+  cart    Cart    @relation(fields: [cartId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([cartId, seenAt])
+  @@map("cart_removal_notices")
+}
+
+model Order {
+  id                String      @id @default(uuid())
+  userId            String      @map("user_id")
+  shippingAddressId String      @map("shipping_address_id")
+  status            OrderStatus @default(pending_payment)
+  totalCents        Int         @map("total_cents")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  user            User        @relation(fields: [userId], references: [id])
+  shippingAddress Address     @relation(fields: [shippingAddressId], references: [id])
+  items           OrderItem[]
+  payments        Payment[]
+  shipments       Shipment[]
+
+  @@index([userId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String  @id @default(uuid())
+  orderId        String  @map("order_id")
+  productId      String  @map("product_id")
+  sellerId       String  @map("seller_id")
+  shipmentId     String? @map("shipment_id")
+  quantity       Int
+  unitPriceCents Int     @map("unit_price_cents")
+
+  order    Order     @relation(fields: [orderId], references: [id])
+  product  Product   @relation(fields: [productId], references: [id])
+  seller   Seller    @relation(fields: [sellerId], references: [id])
+  shipment Shipment? @relation(fields: [shipmentId], references: [id])
+
+  // The seller fulfilment queue reads order_items by seller on every load,
+  // and the new per-seller payment gating joins the same way. Postgres does
+  // not index foreign keys on its own.
+  @@index([orderId])
+  @@index([sellerId])
+  @@map("order_items")
+}
+
+model Shipment {
+  id             String         @id @default(uuid())
+  orderId        String         @map("order_id")
+  sellerId       String         @map("seller_id")
+  carrier        String?
+  trackingNumber String?        @map("tracking_number")
+  status         ShipmentStatus @default(confirmed)
+  confirmedAt    DateTime?      @map("confirmed_at")
+  packedAt       DateTime?      @map("packed_at")
+  receivedAt     DateTime?      @map("received_at")
+
+  order  Order       @relation(fields: [orderId], references: [id])
+  seller Seller      @relation(fields: [sellerId], references: [id])
+  items  OrderItem[]
+
+  @@map("shipments")
+}
+
+// One payment per (order, seller) — not one per order. Buyers pay each store
+// directly into that store's own account, so an order spanning three sellers
+// is three transfers that settle independently: seller A can be paid and
+// shipping while seller C is still waiting.
+model Payment {
+  id            String        @id @default(uuid())
+  orderId       String        @map("order_id")
+  sellerId      String        @map("seller_id")
+  // What this seller is owed for their slice of the order. Stored rather
+  // than recomputed so the amount on the QR the buyer scanned is the amount
+  // on the record, even if a price changes later.
+  amountCents   Int           @map("amount_cents")
+  // Short human-typable code the buyer puts in the transfer description, and
+  // the seller matches against their bank statement. This is the only link
+  // between a bank transfer and an order, so it has to be unique platform-wide.
+  reference     String        @unique
+  status        PaymentStatus @default(pending)
+  // Snapshot of where the money was meant to go. A seller who later edits
+  // their bank details must not retroactively rewrite what a past buyer was
+  // shown — and because every input to the QR (these four fields, the amount
+  // and the reference) is frozen here, the payload regenerates byte-identical
+  // on demand rather than being stored a second time.
+  bankBin       String        @map("bank_bin")
+  bankName      String        @map("bank_name")
+  accountNumber String        @map("account_number")
+  accountName   String        @map("account_name")
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  // Buyer pressed "I've transferred".
+  markedPaidAt  DateTime? @map("marked_paid_at")
+  // Seller confirmed the money actually arrived. This is what unlocks
+  // fulfilment and what makes a review count as a verified purchase.
+  confirmedAt   DateTime? @map("confirmed_at")
+  // Seller rejected it (nothing arrived, wrong amount) with a reason.
+  rejectedAt    DateTime? @map("rejected_at")
+  failureReason String?   @map("failure_reason")
+
+  order  Order  @relation(fields: [orderId], references: [id])
+  seller Seller @relation(fields: [sellerId], references: [id])
+
+  @@unique([orderId, sellerId])
+  @@index([sellerId, status])
+  @@index([orderId])
+  @@map("payments")
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  productId String   @map("product_id")
+  userId    String   @map("user_id")
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  // One review per customer per product, enforced in the database rather
+  // than only in the controller — two concurrent POSTs would both pass an
+  // application-level "have you already reviewed this?" check.
+  @@unique([productId, userId])
+  @@map("reviews")
+}

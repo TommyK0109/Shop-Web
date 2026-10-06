@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "D:/Main Program/Miniconda/envs/medsam2/python.exe",
+  "python.analysis.extraPaths": [
+    "a:/NewProject/sam2"
+  ]
+}

@@ -1,0 +1,73 @@
+﻿# Default local stack: PostgreSQL, one API and the React development server.
+# Run npm run setup:local first to create the private environment files.
+services:
+  postgres:
+    # Existing additive migrations require pgvector even with the assistant off.
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: storefront
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d storefront"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - server/.env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/storefront?schema=public
+      PORT: 5201
+      CLIENT_ORIGIN: http://localhost:5200
+      CLIENT_URL: http://localhost:5200
+      TRUST_PROXY_HOPS: 0
+      REDIS_URL: ""
+      RAG_ENABLED: "false"
+      RAG_GENERATION_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5201:5201"
+    volumes:
+      - ./server/src:/app/server/src
+      - ./server/prisma:/app/server/prisma
+      - ./shared:/app/shared
+    command: >-
+      sh -c "npm run build --workspace shared &&
+      npx prisma migrate deploy --schema server/prisma/schema.prisma &&
+      npm run dev --workspace server"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5201/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:5201/api
+      VITE_TURNSTILE_SITE_KEY: ""
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5200:5200"
+    volumes:
+      - ./client/src:/app/client/src
+      - ./client/index.html:/app/client/index.html
+      - ./client/public:/app/client/public
+      - ./shared:/app/shared
+volumes:
+  postgres_data:
